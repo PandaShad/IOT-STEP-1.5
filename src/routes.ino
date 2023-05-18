@@ -5,18 +5,18 @@
 
 #include "ArduinoJson.h"
 
-extern String last_temp, last_light, target_ip, ssid, mac, ip, location;
+extern String target_ip, ssid, mac, ip, location;
 extern int target_port, target_sp, target_sp;
 extern short int Light_threshold;
 extern unsigned long upTime;
 extern boolean heater_on, cooler_on, is_fire, requestOnBoardLED, requestRedLED, requestGreenLED;
-extern float SHJ, SBJ, SBN, SHN;
+extern float last_temp, last_light, SHJ, SBJ, SBN, SHN;
 
 /*===================================================*/
 String processor(const String& var){
     /* Replaces "placeholder" in html file with sensors values */ /* accessors functions get_... are in sensors.ino file */
     if(var == "TEMPERATURE"){
-        return last_temp;
+        return String(last_temp);
         /* On aimerait écrire : return get_temperature(TempSensor);
         * mais c’est un exemple de ce qu’il ne faut surtout pas écrire ! 
         * yield + async => core dump !
@@ -24,7 +24,7 @@ String processor(const String& var){
     //return get_temperature(TempSensor);
     }
     else if(var == "LIGHT") {
-        return last_light;
+        return String(last_light);
     }
     else if(var == "SSID") {
         return ssid;
@@ -95,7 +95,7 @@ void setup_http_routes(AsyncWebServer* server) { /*
     server->on("/temperature", HTTP_GET, [](AsyncWebServerRequest *request){
         /* The most simple route => hope a response with temperature value */
         /* Exemple de ce qu’il ne faut surtout pas écrire car yield + async => core dump !*/ //request->send_P(200, "text/plain", get_temperature(TempSensor).c_str()); 
-        request->send_P(200, "text/plain", last_temp.c_str());
+        request->send_P(200, "text/plain", String(last_temp).c_str());
     });
     server->on("/value", HTTP_GET, [](AsyncWebServerRequest *request){
         StaticJsonDocument<1024> doc;
@@ -146,7 +146,7 @@ void setup_http_routes(AsyncWebServer* server) { /*
     });
     server->on("/light", HTTP_GET, [](AsyncWebServerRequest *request){ 
         /* The most simple route => hope a response with light value */ 
-        request->send_P(200, "text/plain", last_light.c_str());
+        request->send_P(200, "text/plain", String(last_light).c_str());
     });
     // This route allows users to change thresholds values through GET params
     server->on("/set", HTTP_GET, [](AsyncWebServerRequest *request){

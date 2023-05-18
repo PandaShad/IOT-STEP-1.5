@@ -120,7 +120,7 @@ const int LightPin = A5;
 
 float SHJ = 30;
 float STH = 30.0;
-float SBJ = 29;
+float SBJ = 20;
 
 float SBN = 20;
 float SHN = 25;
@@ -235,7 +235,6 @@ String Serialize_ESPstatus(){
   jsondoc["status"]["heat"] = heater_on; // Heater
   jsondoc["status"]["cold"] = cooler_on; // Cooler
   jsondoc["status"]["fire"] = is_fire; // NO or YES 
-  jsondoc["regul"]["sh"] = SHJ; // Seuil Haut
   jsondoc["regul"]["sh"] = SHJ; // Seuil Haut
   jsondoc["regul"]["sb"] = SBJ;  // Seuil bas
   jsondoc["regul"]["shn"] = SHN; // Seuil Haut

@@ -68,11 +68,10 @@ void wifi_connect_multi(String hostname){
   
   WiFiMulti wm; // Creates an instance of the WiFiMulti class
   // Attention ! PAS arrivé à sortir l'instance de la fonction => heap error ! Why ???? 
-  Serial.println("AndroidAP6109");
   wm.addAP("AndroidAP6109", "evylapluscool");
   wm.addAP("AndroidAP3269", "14062001");
-  // wm.addAP("XXXX-2a60", "QLCCWW5TQWHQ");
-  // wm.addAP("IOT", "iotmiage");
+  wm.addAP("XXXX-2a60", "QLCCWW5TQWHQ");
+  wm.addAP("IOT", "iotmiage");
   
   WiFi.mode(WIFI_OFF);   
   WiFi.mode(WIFI_STA); // Set WiFi to station mode 

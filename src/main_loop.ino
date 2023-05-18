@@ -14,6 +14,8 @@
 #include "SPIFFS.h"
 #include "routes.h"
 
+#include "utils.h"
+
 #define USE_SERIAL Serial
 
 unsigned long upTime = 0;
@@ -129,8 +131,8 @@ OneWire oneWire(23);
 DallasTemperature TempSensor(&oneWire);
 
 String LEDState = "off";
-String last_temp;
-String last_light;
+float last_temp;
+float last_light;
 String ssid, mac, ip, location;
 
 AsyncWebServer server(80);
@@ -157,40 +159,25 @@ void DoSmth(int d) {
     tick = millis();
     last_temp = get_temperature(TempSensor);
     last_light = get_light(LightPin);
+    heater_on = get_heater_status(last_temp, SBJ);
+    cooler_on = get_cooler_status(last_temp, SHJ);
+    is_fire = get_fire_status(last_light);
     sendPostRequest(target_ip, target_port, target_sp);
   }
 }
 
-String get_temperature(DallasTemperature sensor) {
-  sensor.requestTemperaturesByIndex(0);
-  float t = sensor.getTempCByIndex(0);
-  updateLeds(t);
-  return String(t);
-}
-
 void updateLeds(int temperature) {
   digitalWrite(ONBOARD_LED, requestOnBoardLED ? HIGH : LOW);
-  if(temperature < SBJ) {
+  if(heater_on) {
     digitalWrite(RED_LED_PIN, HIGH);
     digitalWrite(GREEN_LED_PIN, LOW);
-    heater_on = true;
-    cooler_on = false;
-  } else if (temperature > SHJ) {
+  } else if (cooler_on) {
     digitalWrite(RED_LED_PIN, LOW);
     digitalWrite(GREEN_LED_PIN, HIGH);
-    heater_on = false;
-    cooler_on = true;
   } else {
     digitalWrite(RED_LED_PIN, LOW);
     digitalWrite(GREEN_LED_PIN, LOW);
-    heater_on = false;
-    cooler_on = false;
   }
-}
-
-String get_light(int lightPin) {
-  int l = analogRead(lightPin);
-  return String(l);
 }
 
 String getLocation() {
@@ -230,8 +217,8 @@ void sendPostRequest(String ip, int port, int sp) {
 
 String Serialize_ESPstatus(){
   StaticJsonDocument<1024> jsondoc;
-  jsondoc["status"]["temperature"] = last_temp; // Temp value
-  jsondoc["status"]["light"] = last_light; // Light value
+  jsondoc["status"]["temperature"] = String(last_temp); // Temp value
+  jsondoc["status"]["light"] = String(last_light); // Light value
   jsondoc["status"]["heat"] = heater_on; // Heater
   jsondoc["status"]["cold"] = cooler_on; // Cooler
   jsondoc["status"]["fire"] = is_fire; // NO or YES 

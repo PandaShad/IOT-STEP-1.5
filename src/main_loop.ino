@@ -1,188 +1,363 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 
-// ---------------LED BLINK-----------------------
+#include "ArduinoOTA.h"
 
-// #define LED_BUILTIN 2
+#include "wifi_utils.h"
+#include "wificonnect.h"
 
-// const int ledPin = 19;
-
-// void setup() {
-  // Serial.begin(9600);
-  // Serial.println("*** This message will only be displayed on start or reset. ***");
-  // delay(2000);
-  // pinMode(ledPin, OUTPUT);
-// }
-
-// void loop() {
-  // digitalWrite(ledPin, HIGH);
-  // delay(1000);
-  // digitalWrite(ledPin, LOW);
-  // delay(1000);
-// }
-
-// ---------------photoresistor-----------------------
-
-// void setup(){
-//   Serial.begin(9600);
-// }
-
-// void loop(){
-//   int sensorValue;
-//   sensorValue=analogRead(A5); // Read analog input on ADC1_CHANNEL_5 (GPIO 33) Pin "D33"
-//   Serial.println(sensorValue, DEC); // Prints the value to the serial port as human-readable ASCII text
-//   delay(1000); // wait as for next reading
-// }
-
-
-// ---------------TODO YOUR WORK-----------------------
-
+#include "WiFi.h"
+#include "HTTPClient.h"
 #include "OneWire.h"
 #include "DallasTemperature.h"
+#include "ESPAsyncWebServer.h"
+#include "SPIFFS.h"
+#include "routes.h"
 
+#define USE_SERIAL Serial
+
+unsigned long upTime = 0;
+// Set timer 
+unsigned long loop_period = 10L * 1000; /* =>  10000ms : 10 s */
+
+/*--------------------------------------------------------------------------* 
+  httpGETRequest using WiFi.h
+*--------------------------------------------------------------------------*/ 
+
+// void httpGETRequest(const char* httpServer, const int httpPort = 80) {
+//   WiFiClient client;
+//   USE_SERIAL.printf("=================================\n");
+//   if (client.connect(httpServer, httpPort) == 0) {
+//     USE_SERIAL.printf("Requesting URL : %s => failed !\n", httpServer);
+//     return;
+//   } else{
+//     USE_SERIAL.printf("URL %s connected !\n", httpServer);
+//   }
+//   String url = "/ip";
+//   String req = String("GET "); // Now create HTTP request header INCLUDING URL
+//   req += url + " HTTP/1.1\r\n";
+//   req += "host: " + String(httpServer) + "\r\n";
+//   req += "User-Agent: esp-idf/1.0 esp32 \r\n";
+//   req += "Accept: */* \r\n";
+//   req += "Connection: close \r\n";
+//   req += "\r\n"; // empty line : separator header/body
+//   USE_SERIAL.printf("----------------------------------------\n");
+//   USE_SERIAL.printf("Request : \n %s",req.c_str());
+//   USE_SERIAL.printf("----------------------------------------\n");
+//   client.print(req);
+//   unsigned long timeout = millis();
+//   while (client.available() == 0) { // no answer => timeout mechanism !
+//     if (millis() - timeout > 10000) {
+//       USE_SERIAL.println(">>> Client Timeout ! => Disconnection !");
+//       client.stop(); // disconnect
+//       return;
+//     }
+//   }
+//   USE_SERIAL.println("Response : ");
+// // all the lines of the reply from server and print them to Serial
+//   while (client.available()) { // Returns the number of bytes available for reading
+//     String line = client.readStringUntil('\r'); USE_SERIAL.print(line); // echo to console "this" line
+//     // en version car by car
+//     //char c = client.read();
+//     //USE_SERIAL.print(c);
+//   }
+//   // End connection and Free resources
+//   USE_SERIAL.println("Closing connection from client side");
+//   client.stop(); // disconnect
+// }
+
+/*--------------------------------------------------------------------------* 
+  httpGETRequest using ArduinoHtppClient.h
+*--------------------------------------------------------------------------*/ 
+
+// String httpGETRequest(const char* UrlServer) {
+//   String payload = "{}";
+//   HTTPClient http;
+//   USE_SERIAL.printf("Requesting URL : %s\n", UrlServer);
+//   http.begin(UrlServer);
+//   int httpResponseCode = http.GET();
+//   if (httpResponseCode>0) {
+//     USE_SERIAL.printf("HTTP Response code : %d", httpResponseCode); payload = http.getString();
+//   }
+//   else {
+//     USE_SERIAL.printf("Error code on HTTP GET Request : %d", httpResponseCode);
+//   }
+//   http.end();
+//   return payload;
+// }
+
+/*--------------------------------------------------------------------------* 
+  ESP as a HTTP server 4.3.1
+*--------------------------------------------------------------------------*/ 
+
+// WiFiServer server(80);
+
+void httpReply(WiFiClient client) {
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-Type: text/html");
+  client.println("Connection: close"); // the connection will be closed after completion of the response 
+  client.println("Refresh: 5"); // refresh the page automatically every 5 sec
+  client.println(); // Empty line between header and body
+  client.println("<!DOCTYPE HTML>");
+  client.println("<html>");
+  client.print("Hello, je tourne depuis : "); // Returns the ms passed since the ESP began running the current program. 
+  client.print(millis()/1000); // On pourrait sans doute donner une info
+  client.println("s <br />"); // plus pertinente ? temperature ?
+  client.println("</html>");
+}
+
+/*--------------------------------------------------------------------------* 
+  ESP as a HTTP server with ESPAsyncWebServer (4.6)
+*--------------------------------------------------------------------------*/ 
+
+void setup_OTA();
+
+const int GREEN_LED_PIN = 19;
 const int ONBOARD_LED=2;
 const int RED_LED_PIN=21;
-const int GREEN_LED_PIN=19;
 const int FAN_PIN=27;
+const int LightPin = A5;
 
-int numberKeyPresses = 0;
+float SHJ = 30;
+float STH = 30.0;
+float SBJ = 20;
+
+float SBN = 20;
+float SHN = 25;
 
 OneWire oneWire(23);
-DallasTemperature tempSensor(&oneWire);
+DallasTemperature TempSensor(&oneWire);
 
-const float SH = 25.0;
-const float STH = 30.0;
-const float SB = 24.0;
+String LEDState = "off";
+String last_temp;
+String last_light;
+String ssid, mac, ip, location;
 
-const int fireBound = 2000;
+AsyncWebServer server(80);
 
+short int Light_threshold = 250;
 
-void setup(void){
-  Serial.begin(9600);
-  tempSensor.begin();
+boolean heater_on = false;
+boolean cooler_on = false;
+boolean is_fire = false;
 
-  pinMode(RED_LED_PIN, OUTPUT);
-  pinMode(GREEN_LED_PIN, OUTPUT);
-  pinMode(ONBOARD_LED, OUTPUT);
+boolean requestOnBoardLED, requestRedLED, requestGreenLED = false;
 
-  ledcAttachPin(FAN_PIN, 0);
-  ledcSetup(0, 25000, 8);
-  ledcWrite(0,0);
-}
+String target_ip = "http://192.168.43.9";
+int target_port = 1880;
+int target_sp = 0; // remaining time before the ESP stops transmitting
 
-void loop(void){
-  tempSensor.requestTemperaturesByIndex(0);
-  float t = tempSensor.getTempCByIndex(0);
-
-  setFanSpeed(SH, STH, t);
-
-  int sensorValue;
-  sensorValue = analogRead(A5);
-
-  if(t<SB){
-    digitalWrite(RED_LED_PIN, HIGH);
-    digitalWrite(GREEN_LED_PIN, LOW);
-  }
-  else if (t>SH)
-  {
-    digitalWrite(RED_LED_PIN, LOW);
-    digitalWrite(GREEN_LED_PIN, HIGH);
+void DoSmth(int d) {
+  static uint32_t tick = 0;
+  if (millis() - tick < d) {
+    return;
   }
   else {
+    USE_SERIAL.println("deja 10 secondes écoulées !");
+    tick = millis();
+    last_temp = get_temperature(TempSensor);
+    last_light = get_light(LightPin);
+    sendPostRequest(target_ip, target_port, target_sp);
+  }
+}
+
+String get_temperature(DallasTemperature sensor) {
+  sensor.requestTemperaturesByIndex(0);
+  float t = sensor.getTempCByIndex(0);
+  updateLeds(t);
+  return String(t);
+}
+
+void updateLeds(int temperature) {
+  digitalWrite(ONBOARD_LED, requestOnBoardLED ? HIGH : LOW);
+  if(temperature < SBJ) {
+    digitalWrite(RED_LED_PIN, HIGH);
+    digitalWrite(GREEN_LED_PIN, LOW);
+    heater_on = true;
+    cooler_on = false;
+  } else if (temperature > SHJ) {
+    digitalWrite(RED_LED_PIN, LOW);
+    digitalWrite(GREEN_LED_PIN, HIGH);
+    heater_on = false;
+    cooler_on = true;
+  } else {
     digitalWrite(RED_LED_PIN, LOW);
     digitalWrite(GREEN_LED_PIN, LOW);
+    heater_on = false;
+    cooler_on = false;
   }
-
-  if(sensorValue>fireBound){
-    digitalWrite(ONBOARD_LED, HIGH);
-  } else {
-    digitalWrite(ONBOARD_LED, LOW);
-  }
-  // getRgbValues(SB, SH, t);
-  String data = Serialize_ESPstatus(t, sensorValue);
-  Serial.println(data);
-  delay(1000);
 }
-String Serialize_ESPstatus(float temp, int light){
-  /*
-   * put all relevant data from esp in a "json formatted" String
-   */
-  StaticJsonDocument<1000> jsondoc;
-  jsondoc["status"]["temperature"] = temp; // Temp value
-  jsondoc["status"]["light"] = light; // Light value
-  // jsondoc["status"]["heat"] = ON; // Heater
-  // jsondoc["status"]["cold"] = OFF; // Cooler
-  // jsondoc["status"]["running"] = RUNNING; // Regulation status : RUNNING or HALT
-  // jsondoc["status"]["fire"] = NO; // NO or YES   
 
-  // jsondoc["regul"]["sh"] = HIGH; // Seuil Haut
-  // jsondoc["regul"]["sb"] = LOW;  // Seuil bas
+String get_light(int lightPin) {
+  int l = analogRead(lightPin);
+  return String(l);
+}
 
-  // jsondoc["info"]["loc"] = LOCATION;
-  // jsondoc["info"]["user"] = IDENTIFIER;
-  // jsondoc["info"]["uptime"] = getUptime();
-  // jsondoc["info"]["ssid"] = getSSID(); // utile quand on se sera connecté .. pour l'instant inutile
-  // jsondoc["info"]["ident"] = getMAC(); // utile quand on se sera connecté .. pour l'instant inutile
-  // jsondoc["info"]["ip"] = getIP(); // utile quand on se sera connecté .. pour l'instant inutile
- 
+String getLocation() {
+  HTTPClient http;
+  String url = "http://ip-api.com/json/";
+  http.begin(url);
+  int httpCode = http.GET();
+  if (httpCode == HTTP_CODE_OK) { 
+    String payload = http.getString();
+    StaticJsonDocument<1024> data;
+    deserializeJson(data, payload);
+    String city = data["city"];
+    String country = data["country"];
+    return city + ", " + country;
+  } else {
+    return "Unknown";
+  }
+  http.end();
+}
 
-  // jsondoc["reporthost"]["target_ip"] = target_ip; // utile quand on se sera connecté .. pour l'instant inutile
-  // jsondoc["reporthost"]["target_port"] = target_port; // utile quand on se sera connecté .. pour l'instant inutile
-  // jsondoc["reporthost"]["sp"] = target_sp; // utile quand on se sera connecté .. pour l'instant inutile
+void sendPostRequest(String ip, int port, int sp) {
+  if (!target_sp == 0) {
+    String url = ip + ":" + port + "/esp?mac=" + mac;
+    USE_SERIAL.println("SHEESH : " + url);
+    String data = Serialize_ESPstatus();
+    USE_SERIAL.println("SHEESH data : " + data);
+    HTTPClient http;
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    int response = http.POST(data);
+    USE_SERIAL.println("SHEESH repsonse : " + response);
+    http.end();
+    target_sp -= 1;
+  }
+  return;
+}
+
+String Serialize_ESPstatus(){
+  StaticJsonDocument<1024> jsondoc;
+  jsondoc["status"]["temperature"] = last_temp; // Temp value
+  jsondoc["status"]["light"] = last_light; // Light value
+  jsondoc["status"]["heat"] = heater_on; // Heater
+  jsondoc["status"]["cold"] = cooler_on; // Cooler
+  jsondoc["status"]["fire"] = is_fire; // NO or YES 
+  jsondoc["regul"]["sh"] = SHJ; // Seuil Haut
+  jsondoc["regul"]["sb"] = SBJ;  // Seuil bas
+  jsondoc["regul"]["shn"] = SHN; // Seuil Haut
+  jsondoc["regul"]["sbn"] = SBN;  // Seuil bas
+  jsondoc["info"]["uptime"] = upTime;
+  jsondoc["info"]["ssid"] = ssid; 
+  jsondoc["info"]["ident"] = mac;
+  jsondoc["info"]["ip"] = ip;
+  jsondoc["reporthost"]["target_ip"] = target_ip; // utile quand on se sera connecté .. pour l'instant inutile
+  jsondoc["reporthost"]["target_port"] = target_port; // utile quand on se sera connecté .. pour l'instant inutile
+  jsondoc["reporthost"]["sp"] = target_sp; // utile quand on se sera connecté .. pour l'instant inutile
  
   String data = "";
   serializeJson(jsondoc, data);
   return data;
 }
 
-void getRgbValues(float minimum, float maximum, float value){
-  float normalizeValue = (value - minimum) / (maximum - minimum) * 2;
-  int blue = getDistance(normalizeValue, 0);
-  int green = getDistance(normalizeValue, 1);
-  int red = getDistance(normalizeValue, 2);
-  char strBuff[50];
-  sprintf(strBuff, "Blue: %d, Green: %d, Red: %d", blue, green, red);
-  // Serial.println(strBuff);
-}
-
-int getDistance(float value, float color){
-  // Serial.println("VALUE");
-  // Serial.println(value);
-  // Serial.println("COLOR");
-  // Serial.println(color);
-  float distance = abs(value-color);
-  // Serial.println("DISTANCE");
-  // Serial.println(distance);
-  float colorStrength = 1 - distance;
-  if(colorStrength < 0){
-    colorStrength = 0;
+void setup(){
+  /* Serial connection -----------------------*/ 
+  USE_SERIAL.begin(9600);
+  while(!USE_SERIAL); //wait for a serial connection
+  /* WiFi connection -----------------------*/
+  String hostname = "Mon petit objet ESP32";
+  wifi_connect_multi(hostname);
+/* WiFi status --------------------------*/
+  if (WiFi.status() == WL_CONNECTED){ 
+    USE_SERIAL.print("\nWiFi connected : yes ! \n"); wifi_status();
   }
-  // Serial.println("COLORSTRENGTH");
-  // Serial.println(colorStrength);
-  return (int)round(colorStrength * 255);
-}
-
-void setFanSpeed(float bottom, float upper, float value) {
-
-  // solution maison
-  float res=0.0;
-  float diff=upper-bottom;
-  float distance=value-bottom;
-  if(distance>=0){
-    res=(distance/diff)*100;
-    // Vitesse minimale du Fan (sinon il ne tourne pas)
-    if(res<=70.0){
-      res=70.0;
-    }
-    else if (res>=255)
-    {
-      res=255.0;
-    }
+  else {
+    USE_SERIAL.print("\nWiFi connected : no ! \n");
+    // ESP.restart();
   }
+  // OTA //setup_OTA();
+  // Initialize the LED
+  pinMode(RED_LED_PIN, OUTPUT);
+  pinMode(ONBOARD_LED, OUTPUT);
+  pinMode(GREEN_LED_PIN, OUTPUT);
+  // Init temperature sensor 
+  TempSensor.begin();
+  // Initialize SPIFFS
+  SPIFFS.begin(true);
+  // Setup routes of the ESP Web server
+  setup_http_routes(&server);
+  server.begin();
 
-  // Api Arduino
-  // res = map(value, bottom, upper, 0, 255);
-
-  ledcWrite(0, res);
-  // Serial.printf("Fan speed: %f RPM \n", res);
+  location = getLocation();
+  ssid = String(WiFi.SSID());
+  mac = String(WiFi.macAddress());
+  ip = WiFi.localIP().toString();
 }
+
+void loop(){
+  int delai = 10000;
+  upTime = millis() / 1000; // convert millis in seconds
+  /* OTA*/
+  //ArduinoOTA.handle();  
+  /* Update sensors */
+  DoSmth(delai);
+  //delay(loop_period); // ms
+}
+
+/*--------------------------------------------------------------------------* 
+  Arduino IDE paradigm : setup+loop 
+  *--------------------------------------------------------------------------*/ 
+// void setup(){
+//   USE_SERIAL.begin(9600);
+//   while(!USE_SERIAL); //wait for a serial connection  
+//   /* WiFi connection  -----------------------*/
+//   String hostname = "Mon petit objet ESP32";
+//   wifi_connect_multi(hostname);
+//   /* WiFi status    --------------------------*/
+//   if (WiFi.status() == WL_CONNECTED) {
+//     USE_SERIAL.println("WiFi connected : yes");
+//     wifi_status();
+//   }
+//   else {
+//     USE_SERIAL.println("WiFi connected : no");
+//   }
+//   server.begin();
+// }
+
+// void loop() {
+//   WiFiClient client = server.available();
+//   if(client) {
+//     Serial.println("New client is connecting !"); 
+//     // an http request ends with a blank line CRLF
+//     boolean currentLineIsBlank = true; 
+//     while (client.connected()) {
+//       if (client.available()) {
+//         char c = client.read();
+//         Serial.write(c); // Echo the request on the console
+//         if (c == '\n' && currentLineIsBlank) { 
+//           httpReply(client); // so you can send a reply break;
+//         }
+//         if (c == '\r') { // you’re starting a new line
+//           currentLineIsBlank = true;
+//         } else if (c != '\r') { // you’ve gotten a character on the current line
+//           currentLineIsBlank = false; 
+//         }
+//       } // end if 
+//     }// end while
+//     delay(loop_period);
+//     client.stop();
+//     Serial.println("client disconnected");
+//   }
+// }
+
+// void loop(){
+//   char httpServer[100] = "http://httpbin.org"; // = "http://worldtimeapi.org/";
+//   const int httpPort = 80;
+//   String path = "/get";
+//   String params = "?led1=""OFF""&led2=""ON""";
+//   String url = String(httpServer)+path+params;
+//   if ((millis() - upTime) > loop_period) { //Check WiFi connection status 
+//     if(WiFi.status()== WL_CONNECTED){
+//       String ret = httpGETRequest(url.c_str());
+//       USE_SERIAL.println(ret);
+//     }
+//     else {
+//       USE_SERIAL.println("WiFi Disconnected");
+//     }
+//       upTime = millis();
+//     }
+//   // httpGETRequest(httpServer, httpPort);
+//   // delay(10000); //ms
+// }
